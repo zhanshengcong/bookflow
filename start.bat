@@ -24,7 +24,7 @@ echo [1/3] Checking port %BACKEND_PORT% ...
 call :kill_port %BACKEND_PORT% "BookFlow Backend"
 if errorlevel 1 exit /b 1
 
-:: Release frontend port
+:: Release frontend port 1
 echo.
 echo [2/3] Checking port %FRONTEND_PORT% ...
 call :kill_port %FRONTEND_PORT% "Vite Frontend"
