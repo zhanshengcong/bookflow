@@ -1,0 +1,47 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body, #root {
+  height: 100%;
+  font-family: 'Inter', 'Noto Sans SC', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  background: #fafaf8;
+  color: #2c2c2a;
+}
+
+/* 滚动条 */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #d3d1c7; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #b4b2a9; }
+
+/* 阅读器主题 */
+.reader-light { background: #f5f1e8; color: #2c2c2a; }
+.reader-sepia { background: #f4ecd8; color: #5b4636; }
+.reader-dark { background: #1a1a2e; color: #d4d4dc; }
+.reader-night { background: #0f0f14; color: #a0a0b0; }
+
+/* 选中 */
+::selection { background: rgba(127, 119, 221, 0.3); }
+
+/* 动画 */
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes slideUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+.animate-fade { animation: fadeIn 0.3s ease; }
+.animate-slide-up { animation: slideUp 0.3s ease; }
+
+/* 移动端 tap highlight */
+* { -webkit-tap-highlight-color: transparent; }
+
+/* epub.js 容器 */
+.epub-container { height: 100%; }
+.epub-container iframe { border: none; width: 100%; height: 100%; }
+
+/* pdf 容器 */
+.pdf-container canvas { display: block; margin: 0 auto; }
+
+/* 触摸手势 */
+.gesture-area { touch-action: pan-y pinch-zoom; }
