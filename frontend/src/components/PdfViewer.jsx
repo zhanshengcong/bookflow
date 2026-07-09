@@ -42,7 +42,11 @@ export const PdfViewer = forwardRef(function PdfViewer({ bookId, onLocationChang
         import('pdfjs-dist')
       ])
 
-      pdfjs.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.mjs`
+      // 使用本地安装的 Worker，确保版本匹配
+      pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+        'pdfjs-dist/build/pdf.worker.min.mjs',
+        import.meta.url
+      ).toString()
 
       const url = `/api/books/${bookId}/file`
       const loadingTask = pdfjs.getDocument(url)

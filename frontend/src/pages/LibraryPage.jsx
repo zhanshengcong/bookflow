@@ -404,7 +404,7 @@ export function LibraryPage() {
       </div>
 
       {/* ── 书籍展示 ── */}
-      <div className="flex-1 overflow-y-auto px-4 pb-8">
+      <div className="flex-1 overflow-y-auto px-4 pb-8 flex justify-center">
         {books.length === 0 && (
           <div className="flex flex-col items-center justify-center h-64 text-gray-400">
             <Library size={48} className="mb-3 opacity-30" />
@@ -425,7 +425,7 @@ export function LibraryPage() {
         )}
 
         {viewMode === 'grid' ? (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-8 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-8 gap-4 w-full max-w-[1800px]">
             {books.map((book) => (
               <div
                 key={book.id}
@@ -483,7 +483,7 @@ export function LibraryPage() {
             ))}
           </div>
         ) : (
-          <div className="space-y-0.5">
+          <div className="space-y-0.5 w-full max-w-[1200px]">
             {books.map((book) => (
               <div
                 key={book.id}

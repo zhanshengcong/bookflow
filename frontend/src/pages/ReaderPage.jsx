@@ -1,11 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
-  ArrowLeft, ChevronLeft, ChevronRight, List, Bookmark, BookmarkPlus,
-  Settings, Sun, Moon, Type, AlignJustify, X
+  ArrowLeft, List, Bookmark, BookmarkPlus,
+  Settings, Sun, Moon, X
 } from 'lucide-react'
 import { useStore } from '../store'
-import { useProgress, useBookmarks } from '../hooks/useApi'
+import { useBookmarks } from '../hooks/useApi'
 import { EpubViewer } from '../components/EpubViewer'
 import { PdfViewer } from '../components/PdfViewer'
 import { TxtViewer } from '../components/TxtViewer'
@@ -25,16 +25,8 @@ export function ReaderPage() {
   const [totalLocations, setTotalLocations] = useState(0)
 
   const readerRef = useRef(null)
-  const theme = useStore((s) => s.readerTheme)
-  const { save, load } = useProgress(bookId)
-  const { bookmarks, add: addBookmark, remove: removeBookmark, fetch: fetchBookmarks } = useBookmarks(bookId)
-
   const readerTheme = useStore((s) => s.readerTheme)
-  const fontSize = useStore((s) => s.fontSize)
-  const fontFamily = useStore((s) => s.fontFamily)
-  const lineHeight = useStore((s) => s.lineHeight)
-  const marginSize = useStore((s) => s.marginSize)
-  const pagination = useStore((s) => s.pagination)
+  const { bookmarks, add: addBookmark, remove: removeBookmark } = useBookmarks(bookId)
 
   useEffect(() => {
     axios.get(`/api/books/${bookId}`).then(({ data }) => {
@@ -47,13 +39,10 @@ export function ReaderPage() {
   }, [bookId])
 
   const handleLocationChange = useCallback((loc, total) => {
-    console.log('[ReaderPage] handleLocationChange:', { loc, total, pct: total > 0 ? Math.round((loc / total) * 100) : 0 })
     setCurrentLocation(loc)
     setTotalLocations(total)
-    // loc 现在是 1-based，保存时转换为 0-based 存到后端
-    const pct = total > 0 ? Math.round((loc / total) * 100) : 0
-    save(null, loc - 1, pct)
-  }, [save])
+    // 进度保存由 EpubViewer 内部通过 CFI + 防抖处理，这里只更新UI显示
+  }, [])
 
   const handleTocReady = useCallback((items) => {
     setToc(items)
@@ -121,7 +110,7 @@ export function ReaderPage() {
       </header>
 
       {/* ── 阅读区域 ── */}
-      <div className="flex-1 relative overflow-hidden">
+      <div className="flex-1 relative overflow-hidden flex justify-center">
         {book.format === 'pdf' ? (
           <PdfViewer
             bookId={book.id}
@@ -145,43 +134,21 @@ export function ReaderPage() {
         )}
       </div>
 
-      {/* ── 底部导航栏 ── */}
-      <footer className={`px-3 py-2 ${getFooterBg()} border-t border-gray-200/20`}>
-        {/* 翻页按钮行 */}
-        <div className="flex items-center justify-center gap-2 mb-1.5">
-          <button
-            onClick={() => readerRef.current?.goPrev?.()}
-            className="flex items-center gap-1 px-4 py-1.5 rounded-lg bg-gray-100/80 hover:bg-gray-200/80
-              dark:bg-gray-700/50 dark:hover:bg-gray-600/50 text-xs transition-colors"
-          >
-            <ChevronLeft size={14} />
-            上一页
-          </button>
-          <span className="text-xs opacity-40 min-w-[60px] text-center">
-            {totalLocations === 100 && pagination === 'scroll'
-              ? `${progressPct}%`
-              : totalLocations > 0
-                ? `${currentLocation}/${totalLocations}`
-                : '加载中...'}
+      {/* ── 底部进度栏 ── */}
+      <footer className={`px-4 py-2.5 ${getFooterBg()} border-t border-gray-200/20`}>
+        <div className="flex items-center gap-3">
+          <span className="text-xs opacity-50 min-w-[80px]">
+            {totalLocations > 0
+              ? `${currentLocation} / ${totalLocations} 页`
+              : '加载中...'}
           </span>
-          <button
-            onClick={() => readerRef.current?.goNext?.()}
-            className="flex items-center gap-1 px-4 py-1.5 rounded-lg bg-indigo-100/80 hover:bg-indigo-200/80
-              dark:bg-indigo-900/30 dark:hover:bg-indigo-800/40 text-xs text-indigo-700 dark:text-indigo-300 transition-colors"
-          >
-            下一页
-            <ChevronRight size={14} />
-          </button>
-        </div>
-        {/* 进度条 */}
-        <div className="flex items-center gap-2">
-          <span className="text-xs opacity-40 w-8 text-right">{progressPct}%</span>
-          <div className="flex-1 h-1 rounded-full bg-gray-300/30 overflow-hidden">
+          <div className="flex-1 h-1.5 rounded-full bg-gray-300/30 overflow-hidden">
             <div
               className="h-full rounded-full bg-indigo-500 transition-all duration-300"
               style={{ width: `${progressPct}%` }}
             />
           </div>
+          <span className="text-xs opacity-50 w-10 text-right">{progressPct}%</span>
         </div>
       </footer>
 
@@ -269,8 +236,7 @@ export function ReaderPage() {
 // ── 阅读设置弹出面板 ──
 function ReaderSettings({ onClose }) {
   const { readerTheme, setReaderTheme, fontSize, setFontSize, fontFamily, setFontFamily,
-    lineHeight, setLineHeight, marginSize, setMarginSize, pagination, setPagination } = useStore()
-  const store = useStore()
+    lineHeight, setLineHeight, marginSize, setMarginSize } = useStore()
 
   const themes = [
     { key: 'light', label: '亮白', icon: Sun, bg: '#f5f1e8', text: '#2c2c2a' },
@@ -364,34 +330,12 @@ function ReaderSettings({ onClose }) {
         </div>
       </div>
 
-      {/* 翻页模式 */}
-      <div className="mb-3">
-        <div className="flex items-center justify-between text-xs text-gray-400 mb-1">
-          <span>翻页模式</span>
-        </div>
-        <div className="flex gap-2">
-          {[
-            { key: 'scroll', label: '滚动' },
-            { key: 'paginated', label: '翻页' },
-          ].map((m) => (
-            <button
-              key={m.key}
-              onClick={() => setPagination(m.key)}
-              className={`flex-1 py-1.5 rounded-lg text-xs border
-                ${pagination === m.key ? 'border-indigo-500 bg-indigo-50 text-indigo-600' : 'border-gray-200'}`}
-            >
-              {m.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
       {/* 操作提示 */}
       <div className="pt-3 border-t border-gray-100 dark:border-gray-700">
         <p className="text-xs text-gray-400 mb-2">操作方式</p>
         <div className="space-y-1.5 text-[11px] text-gray-500 leading-relaxed">
           <p><kbd className="px-1 py-0.5 rounded bg-gray-100 text-[10px] font-mono">← →</kbd> 键盘方向键翻页</p>
-          <p><kbd className="px-1 py-0.5 rounded bg-gray-100 text-[10px] font-mono">PageUp/Down</kbd> 翻页键翻页</p>
+          <p>鼠标 <span className="text-indigo-500">滚轮</span> 上下翻页</p>
           <p>点击屏幕 <span className="text-indigo-500">左侧</span> / <span className="text-indigo-500">右侧</span> 区域翻页</p>
           <p>手机端 <span className="text-indigo-500">左右滑动</span> 翻页</p>
         </div>

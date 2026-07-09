@@ -2,6 +2,18 @@ import { useEffect, useRef, useImperativeHandle, forwardRef, useState, useCallba
 import { useStore } from '../store'
 import axios from 'axios'
 
+// ── 防抖 Hook ──
+function useDebouncedCallback(fn, delay) {
+  const timer = useRef(null)
+  return useCallback(
+    (...args) => {
+      if (timer.current) clearTimeout(timer.current)
+      timer.current = setTimeout(() => fn(...args), delay)
+    },
+    [fn, delay]
+  )
+}
+
 export const EpubViewer = forwardRef(function EpubViewer({ bookId, onLocationChange, onTocReady }, ref) {
   const viewerRef = useRef(null)
   const bookRef = useRef(null)
@@ -12,46 +24,51 @@ export const EpubViewer = forwardRef(function EpubViewer({ bookId, onLocationCha
   const touchStartY = useRef(0)
   const [canPrev, setCanPrev] = useState(false)
   const [canNext, setCanNext] = useState(true)
-  const locationsRef = useRef(null)
-  const scrollContainerRef = useRef(null)
+  const currentCfiRef = useRef(null)
+  const [loadError, setLoadError] = useState(null)
 
   const theme = useStore((s) => s.readerTheme)
   const fontSize = useStore((s) => s.fontSize)
   const fontFamily = useStore((s) => s.fontFamily)
   const lineHeight = useStore((s) => s.lineHeight)
   const marginSize = useStore((s) => s.marginSize)
-  const pagination = useStore((s) => s.pagination)
 
   const isDark = theme === 'dark' || theme === 'night'
-  const isScroll = pagination === 'scroll'
+
+  // ── 防抖保存进度 ──
+  const saveProgressDebounced = useDebouncedCallback((cfi, pct) => {
+    axios.put(`/api/progress/${bookId}`, { cfi, percent: pct }).catch(() => {
+      // 进度保存失败不打断阅读，静默重试留给下一次翻页
+    })
+  }, 500)
 
   useImperativeHandle(ref, () => ({
     navigateTo(href) {
       if (renditionRef.current) {
-        renditionRef.current.display(href)
+        try { renditionRef.current.display(href) } catch { /* ignore */ }
       }
     },
     goPrev() {
       if (renditionRef.current) {
-        renditionRef.current.prev()
+        try { renditionRef.current.prev() } catch { /* ignore */ }
       }
     },
     goNext() {
       if (renditionRef.current) {
-        renditionRef.current.next()
+        try { renditionRef.current.next() } catch { /* ignore */ }
       }
     },
   }))
 
   const goPrev = useCallback(() => {
     if (renditionRef.current) {
-      renditionRef.current.prev()
+      try { renditionRef.current.prev() } catch { /* ignore */ }
     }
   }, [])
 
   const goNext = useCallback(() => {
     if (renditionRef.current) {
-      renditionRef.current.next()
+      try { renditionRef.current.next() } catch { /* ignore */ }
     }
   }, [])
 
@@ -61,20 +78,10 @@ export const EpubViewer = forwardRef(function EpubViewer({ bookId, onLocationCha
     navTimerRef.current = setTimeout(() => setShowNav(false), 1500)
   }, [])
 
-  // ── 滚动进度：监听外层 container 的滚动 ──
-  const updateScrollProgress = useCallback(() => {
-    const el = scrollContainerRef.current
-    if (!el || !isScroll) return
-    const scrollTop = el.scrollTop
-    const maxScroll = Math.max(1, el.scrollHeight - el.clientHeight)
-    const pct = Math.min(1, Math.max(0, scrollTop / maxScroll))
-    onLocationChange(Math.round(pct * 100), 100)
-    setCanPrev(pct > 0.01)
-    setCanNext(pct < 0.99)
-  }, [isScroll, onLocationChange])
-
+  // ── 初始化 epub.js（只在 bookId 变化时重建） ──
   useEffect(() => {
     let cancelled = false
+    setLoadError(null)
 
     async function init() {
       const url = `/api/books/${bookId}/file`
@@ -93,27 +100,59 @@ export const EpubViewer = forwardRef(function EpubViewer({ bookId, onLocationCha
         width: '100%',
         height: '100%',
         spread: 'none',
-        flow: isScroll ? 'scrolled-doc' : 'paginated',
+        flow: 'paginated',
         manager: 'default',
         allowScriptedContent: true,
       })
 
       renditionRef.current = rendition
 
-      await book.ready
+      // 注册主题和字号
+      registerThemes(rendition, theme, fontSize, fontFamily, lineHeight, marginSize)
+      rendition.themes.select('reader')
 
-      // 目录
-      if (!cancelled) {
-        const nav = book.navigation
-        if (nav) {
-          const toc = buildToc(nav.toc || [])
-          onTocReady(toc)
+      // 键盘翻页：同时监听 iframe 内部和外层
+      function handleKeyup(e) {
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return
+        if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+          e.preventDefault()
+          try {
+            if (e.key === 'ArrowLeft') rendition.prev()
+            else rendition.next()
+          } catch { /* 忽略边界错误 */ }
         }
       }
+      rendition.on('keyup', handleKeyup)
+      document.addEventListener('keyup', handleKeyup)
 
-      // 配置样式
-      rendition.themes.register('reader', buildTheme())
-      rendition.themes.select('reader')
+      // ── 鼠标滚轮翻页（带防抖锁） ──
+      let wheelLocked = false
+      function handleWheel(e) {
+        e.preventDefault()
+        if (wheelLocked || Math.abs(e.deltaY) < 20) return
+        wheelLocked = true
+        try {
+          if (e.deltaY > 0) rendition.next()
+          else rendition.prev()
+        } catch {
+          // rendition 可能还没准备好或已达到边界，静默忽略
+        }
+        setTimeout(() => { wheelLocked = false }, 400)
+      }
+      // 通过 hooks.content 注入到每个 iframe 文档
+      rendition.hooks.content.register((contents) => {
+        contents.document.addEventListener('wheel', handleWheel, { passive: false })
+      })
+      viewerRef.current.addEventListener('wheel', handleWheel, { passive: false })
+
+      await book.ready
+      if (cancelled) return
+
+      // 目录
+      const nav = book.navigation
+      if (nav) {
+        onTocReady(buildToc(nav.toc || []))
+      }
 
       // 恢复阅读进度
       let savedCfi = null
@@ -124,68 +163,65 @@ export const EpubViewer = forwardRef(function EpubViewer({ bookId, onLocationCha
         }
       } catch { /* no progress */ }
 
-      // 立即显示内容
-      if (savedCfi) {
-        await rendition.display(savedCfi)
-      } else {
-        await rendition.display()
+      try {
+        await rendition.display(savedCfi || undefined)
+        if (cancelled) return
+      } catch (e) {
+        if (!cancelled) setLoadError('这本书打不开，文件可能损坏或格式不支持')
+        return
       }
 
-      if (cancelled) return
+      // 监听翻页事件，用 CFI + 百分比保存进度
+      rendition.on('relocated', (location) => {
+        try {
+          const cfi = location?.start?.cfi
+          if (!cfi) return
+          const pct = book.locations?.percentageFromCfi
+            ? Math.round(book.locations.percentageFromCfi(cfi) * 100)
+            : 0
 
-      // 找到滚动容器（epub.js 的 stage container，滚动发生在这个 div 上）
-      // epub.js 在 viewerRef.current 下创建了一个 div 作为 stage container
-      const stageContainer = viewerRef.current?.querySelector(':scope > div')
-      if (stageContainer) {
-        scrollContainerRef.current = stageContainer
+          currentCfiRef.current = cfi
 
-        if (isScroll) {
-          // 滚动模式：监听 stage container 的 scroll 事件
-          stageContainer.addEventListener('scroll', updateScrollProgress, { passive: true })
-          // 初始触发
-          setTimeout(updateScrollProgress, 100)
+          // 获取页码范围
+          const startLoc = location.start
+          const endLoc = location.end
+          const atStart = startLoc?.atStart === true || (startLoc?.displayed?.page === 1)
+          const atEnd = endLoc?.atEnd === true || (book.locations?.total && startLoc?.location >= book.locations.total)
+
+          setCanPrev(!atStart)
+          setCanNext(!atEnd)
+
+          // 通知外部（用于显示进度）
+          if (book.locations?.total) {
+            const total = book.locations.total + 1
+            const current = (startLoc?.location ?? 0) + 1
+            onLocationChange(current, total)
+          } else {
+            onLocationChange(pct, 100)
+          }
+
+          saveProgressDebounced(cfi, pct)
+        } catch {
+          // 某些 epub 的 location 结构可能异常，静默忽略
         }
-      }
+      })
 
-      if (!isScroll) {
-        // 翻页模式：生成分页位置
-        const locations = book.locations
-        locationsRef.current = locations
-
-        locations.generate(1200).then(() => {
-          if (cancelled) return
-          const t = locations.total + 1
-          const loc = rendition.currentLocation()
-          const raw = loc?.start?.location
-          let current
-          if (raw !== undefined && raw >= 0) {
-            current = raw + 1
-          } else {
-            current = 1
-          }
-          onLocationChange(current, t)
-          setCanPrev(current > 1)
-          setCanNext(current < t)
-        })
-
-        rendition.on('relocated', (loc) => {
-          const l = locationsRef.current
-          if (!l || l.total < 0) {
-            onLocationChange(0, 0)
-            return
-          }
-          const t = l.total + 1
-          const raw = loc?.start?.location
-          let current
-          if (raw !== undefined && raw >= 0) {
-            current = raw + 1
-          } else {
-            current = 1
-          }
-          onLocationChange(current, t)
-          setCanPrev(current > 1)
-          setCanNext(current < t)
-        })
+      // 初始化完成后触发一次进度
+      const initLoc = rendition.currentLocation()
+      if (initLoc?.start) {
+        const cfi = initLoc.start.cfi
+        currentCfiRef.current = cfi
+        const pct = book.locations?.percentageFromCfi
+          ? Math.round(book.locations.percentageFromCfi(cfi) * 100)
+          : 0
+        if (book.locations?.total) {
+          const total = book.locations.total + 1
+          const current = (initLoc.start.location ?? 0) + 1
+          onLocationChange(current, total)
+        } else {
+          onLocationChange(pct, 100)
+        }
+        saveProgressDebounced(cfi, pct)
       }
     }
 
@@ -193,44 +229,37 @@ export const EpubViewer = forwardRef(function EpubViewer({ bookId, onLocationCha
 
     return () => {
       cancelled = true
-      if (scrollContainerRef.current) {
-        scrollContainerRef.current.removeEventListener('scroll', updateScrollProgress)
-      }
+      // 清理工作由 effect 闭包处理
       if (renditionRef.current) {
         renditionRef.current.destroy()
+        renditionRef.current = null
       }
     }
   }, [bookId])
 
-  // 主题/字体变化时更新
+  // ── 主题变化：只更新样式，不重建实例 ──
   useEffect(() => {
     if (renditionRef.current) {
-      const r = renditionRef.current
-      r.themes.register('reader', buildTheme())
-      r.themes.select('reader')
-      if (r.currentLocation) {
-        r.display(r.currentLocation?.start?.cfi)
-      }
+      registerThemes(renditionRef.current, theme, fontSize, fontFamily, lineHeight, marginSize)
+      renditionRef.current.themes.select('reader')
     }
-  }, [theme, fontSize, fontFamily, lineHeight, marginSize])
+  }, [theme])
 
-  // ── 键盘翻页 ──
+  // ── 字号变化：热切换 ──
   useEffect(() => {
-    const handleKey = (e) => {
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return
-      if (e.key === 'ArrowRight' || e.key === 'PageDown') {
-        e.preventDefault()
-        goNext()
-        flashNav()
-      } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
-        e.preventDefault()
-        goPrev()
-        flashNav()
-      }
+    if (renditionRef.current) {
+      registerThemes(renditionRef.current, theme, fontSize, fontFamily, lineHeight, marginSize)
+      renditionRef.current.themes.select('reader')
     }
-    window.addEventListener('keydown', handleKey)
-    return () => window.removeEventListener('keydown', handleKey)
-  }, [goNext, goPrev, flashNav])
+  }, [fontSize])
+
+  // ── 字体/行间距/页边距变化：更新主题 ──
+  useEffect(() => {
+    if (renditionRef.current) {
+      registerThemes(renditionRef.current, theme, fontSize, fontFamily, lineHeight, marginSize)
+      renditionRef.current.themes.select('reader')
+    }
+  }, [fontFamily, lineHeight, marginSize])
 
   // ── 触摸滑动翻页 ──
   useEffect(() => {
@@ -247,11 +276,8 @@ export const EpubViewer = forwardRef(function EpubViewer({ bookId, onLocationCha
       const dy = touchStartY.current - e.changedTouches[0].clientY
 
       if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 60) {
-        if (dx > 0) {
-          goNext()
-        } else {
-          goPrev()
-        }
+        if (dx > 0) goNext()
+        else goPrev()
         flashNav()
       }
     }
@@ -265,37 +291,52 @@ export const EpubViewer = forwardRef(function EpubViewer({ bookId, onLocationCha
     }
   }, [goNext, goPrev, flashNav])
 
-  function buildTheme() {
+  // ── 点击区域翻页 ──
+  const handleClickArea = useCallback((e) => {
+    // 只在翻页模式下响应点击
+    const rect = viewerRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const x = e.clientX - rect.left
+    const width = rect.width
+    // 左侧 25% 区域：上一页；右侧 25% 区域：下一页
+    if (x < width * 0.25) {
+      goPrev()
+      flashNav()
+    } else if (x > width * 0.75) {
+      goNext()
+      flashNav()
+    }
+  }, [goPrev, goNext, flashNav])
+
+  function registerThemes(rendition, t, fs, ff, lh, ms) {
     const bgMap = {
       light: '#f5f1e8', sepia: '#f4ecd8', dark: '#1a1a2e', night: '#0f0f14'
     }
     const colorMap = {
       light: '#2c2c2a', sepia: '#5b4636', dark: '#d4d4dc', night: '#a0a0b0'
     }
-    return {
+    rendition.themes.register('reader', {
       body: {
-        background: bgMap[theme] || '#f5f1e8',
-        color: colorMap[theme] || '#2c2c2a',
-        'font-family': fontFamily === 'sans' ? 'Inter, Noto Sans SC, system-ui, sans-serif'
-          : fontFamily === 'mono' ? '"JetBrains Mono", monospace'
-          : 'Georgia, Noto Serif SC, serif',
-        'font-size': `${fontSize}px`,
-        'line-height': lineHeight,
-        padding: `${marginSize}px ${marginSize * 0.75}px`,
-        'max-width': '800px',
-        margin: '0 auto',
+        background: bgMap[t] || '#f5f1e8',
+        color: colorMap[t] || '#2c2c2a',
+        'font-family': ff === 'sans' ? 'Inter, "Noto Sans SC", system-ui, sans-serif'
+          : ff === 'mono' ? '"JetBrains Mono", monospace'
+          : 'Georgia, "Noto Serif SC", serif',
+        'font-size': `${fs}px`,
+        'line-height': lh,
+        padding: `${ms}px ${ms * 0.75}px`,
       },
       p: {
-        'font-size': `${fontSize}px`,
-        'line-height': lineHeight,
+        'font-size': `${fs}px`,
+        'line-height': lh,
       },
       'h1, h2, h3, h4, h5, h6': {
-        'font-family': fontFamily === 'sans' ? 'Inter, Noto Sans SC, system-ui, sans-serif'
-          : fontFamily === 'mono' ? '"JetBrains Mono", monospace'
-          : 'Georgia, Noto Serif SC, serif',
+        'font-family': ff === 'sans' ? 'Inter, "Noto Sans SC", system-ui, sans-serif'
+          : ff === 'mono' ? '"JetBrains Mono", monospace'
+          : 'Georgia, "Noto Serif SC", serif',
       },
       a: { color: 'inherit' },
-    }
+    })
   }
 
   function buildToc(items, level = 0) {
@@ -312,52 +353,65 @@ export const EpubViewer = forwardRef(function EpubViewer({ bookId, onLocationCha
   const arrowColor = isDark ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.25)'
 
   return (
-    <div className="relative w-full h-full select-none">
+    <div className="relative w-full h-full select-none flex justify-center" onClick={handleClickArea}>
       {/* epub.js 渲染容器 */}
-      <div ref={viewerRef} className="w-full h-full epub-container" />
+      <div ref={viewerRef} className="w-full h-full epub-container" style={{ maxWidth: '900px' }} />
+
+      {/* 加载错误 */}
+      {loadError && (
+        <div className="absolute inset-0 flex items-center justify-center z-20" style={{ background: isDark ? '#1a1a2e' : '#f5f1e8' }}>
+          <div className="text-center">
+            <p className="text-sm text-red-500 mb-3">{loadError}</p>
+            <button
+              onClick={() => window.history.back()}
+              className="px-4 py-2 rounded-lg bg-indigo-500 text-white text-sm hover:bg-indigo-600 transition-colors"
+            >
+              返回书库
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ── 左右翻页箭头覆盖层 ── */}
-      {pagination === 'paginated' && (
-        <>
-          <button
-            onClick={(e) => { e.stopPropagation(); goPrev(); flashNav() }}
-            className={`absolute left-3 top-1/2 -translate-y-1/2 w-12 h-12 flex items-center justify-center
-              rounded-full transition-all duration-300 z-10
-              ${showNav && canPrev ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
-            style={{
-              background: `rgba(${isDark ? '255,255,255' : '0,0,0'},0.08)`,
-              backdropFilter: 'blur(4px)',
-            }}
-            aria-label="上一页"
+      <>
+        <button
+          onClick={(e) => { e.stopPropagation(); goPrev(); flashNav() }}
+          className={`absolute left-3 top-1/2 -translate-y-1/2 w-12 h-12 flex items-center justify-center
+            rounded-full transition-all duration-300 z-10
+            ${showNav && canPrev ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+          style={{
+            background: `rgba(${isDark ? '255,255,255' : '0,0,0'},0.08)`,
+            backdropFilter: 'blur(4px)',
+          }}
+          aria-label="上一页"
+        >
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+            style={{ color: arrowColor }}
           >
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-              strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-              style={{ color: arrowColor }}
-            >
-              <path d="M15 18l-6-6 6-6" />
-            </svg>
-          </button>
+            <path d="M15 18l-6-6 6-6" />
+          </svg>
+        </button>
 
-          <button
-            onClick={(e) => { e.stopPropagation(); goNext(); flashNav() }}
-            className={`absolute right-3 top-1/2 -translate-y-1/2 w-12 h-12 flex items-center justify-center
-              rounded-full transition-all duration-300 z-10
-              ${showNav && canNext ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
-            style={{
-              background: `rgba(${isDark ? '255,255,255' : '0,0,0'},0.08)`,
-              backdropFilter: 'blur(4px)',
-            }}
-            aria-label="下一页"
+        <button
+          onClick={(e) => { e.stopPropagation(); goNext(); flashNav() }}
+          className={`absolute right-3 top-1/2 -translate-y-1/2 w-12 h-12 flex items-center justify-center
+            rounded-full transition-all duration-300 z-10
+            ${showNav && canNext ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+          style={{
+            background: `rgba(${isDark ? '255,255,255' : '0,0,0'},0.08)`,
+            backdropFilter: 'blur(4px)',
+          }}
+          aria-label="下一页"
+        >
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+            style={{ color: arrowColor }}
           >
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-              strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-              style={{ color: arrowColor }}
-            >
-              <path d="M9 18l6-6-6-6" />
-            </svg>
-          </button>
-        </>
-      )}
+            <path d="M9 18l6-6-6-6" />
+          </svg>
+        </button>
+      </>
     </div>
   )
 })
