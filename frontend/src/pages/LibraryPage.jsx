@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Library, BookOpen, Search, Upload, Trash2, RefreshCw, X, Menu,
@@ -25,7 +25,7 @@ function CoverImage({ src, title, small }) {
 
   if (small) {
     return (
-      <img src={src} alt={title} className="w-full h-full object-cover" onError={() => setFailed(true)} />
+      <img src={src} alt={title} className="w-full h-full object-cover" loading="lazy" onError={() => setFailed(true)} />
     )
   }
 
@@ -212,14 +212,34 @@ export function LibraryPage() {
   const [selectedIds, setSelectedIds] = useState(new Set())
   const [formatFilter, setFormatFilter] = useState('') // '' = 全部
   const { libraries, addLibrary, removeLibrary, rescan } = useLibraries()
-  const { books, total, fetch: refetchBooks, removeBooks, removeBook } = useBooks({
-    q: searchQuery, limit: 200, ...(formatFilter ? { format: formatFilter } : {})
+  const { books, total, fetch: refetchBooks, loadMore, hasMore, removeBooks, removeBook } = useBooks({
+    q: searchQuery, ...(formatFilter ? { format: formatFilter } : {})
   })
   const { stats, refetchStats } = useStats()
+  const listRef = useRef(null)
 
-  const handleImported = () => {
+  // ── 滚动加载更多 ──
+  useEffect(() => {
+    const el = listRef.current
+    if (!el) return
+    const handleScroll = () => {
+      if (el.scrollHeight - el.scrollTop - el.clientHeight < 200) {
+        loadMore()
+      }
+    }
+    el.addEventListener('scroll', handleScroll, { passive: true })
+    return () => el.removeEventListener('scroll', handleScroll)
+  }, [loadMore])
+
+  const handleImported = async () => {
     refetchBooks()
     refetchStats()
+    // 上传完成后自动提取元数据（封面、作者等）
+    try {
+      await axios.post('/api/books/meta/extract')
+      refetchBooks()
+      refetchStats()
+    } catch {}
   }
 
   const handleOpenBook = (book) => {
@@ -237,11 +257,20 @@ export function LibraryPage() {
     setSelectedIds(next)
   }
 
-  const toggleSelectAll = () => {
-    if (selectedIds.size === books.length) {
+  const toggleSelectAll = async () => {
+    if (selectedIds.size === total) {
       setSelectedIds(new Set())
     } else {
-      setSelectedIds(new Set(books.map((b) => b.id)))
+      // 获取所有书的 ID（跨分页）
+      try {
+        const { data } = await axios.get('/api/books', {
+          params: { q: searchQuery, limit: 10000, ...(formatFilter ? { format: formatFilter } : {}) }
+        })
+        setSelectedIds(new Set(data.data.map((b) => b.id)))
+      } catch {
+        // 降级：只选当前页
+        setSelectedIds(new Set(books.map((b) => b.id)))
+      }
     }
   }
 
@@ -301,7 +330,7 @@ export function LibraryPage() {
                 onClick={toggleSelectAll}
                 className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 font-medium transition-colors"
               >
-                {selectedIds.size === books.length ? '取消全选' : '全选'}
+                {selectedIds.size === total ? '取消全选' : '全选'}
               </button>
               <button
                 onClick={handleBatchDelete}
@@ -404,7 +433,7 @@ export function LibraryPage() {
       </div>
 
       {/* ── 书籍展示 ── */}
-      <div className="flex-1 overflow-y-auto px-4 pb-8 flex justify-center">
+      <div ref={listRef} className="flex-1 overflow-y-auto px-4 pb-8 flex justify-center">
         {books.length === 0 && (
           <div className="flex flex-col items-center justify-center h-64 text-gray-400">
             <Library size={48} className="mb-3 opacity-30" />
@@ -481,6 +510,17 @@ export function LibraryPage() {
                 </p>
               </div>
             ))}
+            {/* 加载更多提示 - grid */}
+            {hasMore && books.length > 0 && (
+              <div key="loadmore" style={{ gridColumn: '1 / -1', display: 'flex', justifyContent: 'center', padding: '24px 0' }}>
+                <span className="text-xs text-gray-400 animate-pulse">加载更多...</span>
+              </div>
+            )}
+            {!hasMore && books.length > 0 && (
+              <div key="total" style={{ gridColumn: '1 / -1', display: 'flex', justifyContent: 'center', padding: '24px 0' }}>
+                <span className="text-xs text-gray-300">共 {total} 本</span>
+              </div>
+            )}
           </div>
         ) : (
           <div className="space-y-0.5 w-full max-w-[1200px]">
@@ -526,6 +566,12 @@ export function LibraryPage() {
                 )}
               </div>
             ))}
+            {/* 加载更多提示 - list */}
+            {hasMore && (
+              <div className="flex justify-center py-6">
+                <span className="text-xs text-gray-400 animate-pulse">加载更多...</span>
+              </div>
+            )}
           </div>
         )}
       </div>

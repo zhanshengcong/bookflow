@@ -48,7 +48,7 @@ async function scanFiles(files, libraryId, db) {
 }
 
 function collectFiles(dirPath) {
-  const fileMap = new Map() // key: dir/name(noext) -> { path, ext, priority }
+  const fileMap = new Map() // key: name(noext) -> { path, ext, priority }
 
   function walk(dir) {
     let entries
@@ -62,7 +62,8 @@ function collectFiles(dirPath) {
         const ext = path.extname(entry.name).toLowerCase()
         if (!SUPPORTED_EXTS.includes(ext)) continue
         const nameNoExt = path.basename(entry.name, ext)
-        const key = `${dir}::${nameNoExt}`
+        // 按书名去重（不区分目录），同一本书多种格式时只保留优先级最高的
+        const key = nameNoExt
         const priority = FORMAT_PRIORITY[ext.slice(1)] || 0
         const existing = fileMap.get(key)
         if (!existing || priority > existing.priority) {

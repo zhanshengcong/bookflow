@@ -49,6 +49,18 @@ export async function booksRouter(fastify) {
     if (!fs.existsSync(book.file_path))
       return reply.code(404).send({ error: 'File not found on disk' })
 
+    // MOBI/AZW3: 返回提取的文本内容而非原始文件
+    if (book.format === 'mobi' || book.format === 'azw3') {
+      const { extractMobiText } = await import('../parser.js')
+      const text = extractMobiText(book.file_path)
+      if (text) {
+        reply.header('Content-Type', 'text/plain; charset=utf-8')
+        reply.header('Cache-Control', 'public, max-age=86400')
+        return reply.send(text)
+      }
+      // 提取失败，回退到原始文件（让前端自己处理）
+    }
+
     const stat = fs.statSync(book.file_path)
     const mimeType = mime.lookup(book.file_path) || 'application/octet-stream'
 
@@ -97,7 +109,7 @@ export async function booksRouter(fastify) {
         let meta = {}
         if (ext === 'epub') meta = await parseEpub(book.file_path, book.id)
         else if (ext === 'mobi' || ext === 'azw3') meta = await parseMobiMeta(book.file_path, book.id)
-        else if (ext === 'pdf') meta = await parsePdfMeta(book.file_path)
+        else if (ext === 'pdf') meta = await parsePdfMeta(book.file_path, book.id)
         else if (ext === 'txt') meta = await parseTxtMeta(book.file_path)
 
         if (meta.title || meta.author || meta.cover_path || meta.series) {

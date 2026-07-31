@@ -86,24 +86,42 @@ export const EpubViewer = forwardRef(function EpubViewer({ bookId, onLocationCha
     async function init() {
       const url = `/api/books/${bookId}/file`
 
-      const [ePubMod] = await Promise.all([
-        import(/* @vite-ignore */ 'epubjs'),
-      ])
+      let ePubMod
+      try {
+        [ePubMod] = await Promise.all([
+          import(/* @vite-ignore */ 'epubjs'),
+        ])
+      } catch (e) {
+        if (!cancelled) setLoadError('epub.js 加载失败，请刷新页面重试')
+        return
+      }
 
       const { default: ePub } = ePubMod
       if (cancelled) return
 
-      const book = ePub(url, { openAs: 'epub' })
+      let book
+      try {
+        book = ePub(url, { openAs: 'epub' })
+      } catch (e) {
+        if (!cancelled) setLoadError('无法解析该文件，格式可能不支持')
+        return
+      }
       bookRef.current = book
 
-      const rendition = book.renderTo(viewerRef.current, {
-        width: '100%',
-        height: '100%',
-        spread: 'none',
-        flow: 'paginated',
-        manager: 'default',
-        allowScriptedContent: true,
-      })
+      let rendition
+      try {
+        rendition = book.renderTo(viewerRef.current, {
+          width: '100%',
+          height: '100%',
+          spread: 'none',
+          flow: 'paginated',
+          manager: 'default',
+          allowScriptedContent: true,
+        })
+      } catch (e) {
+        if (!cancelled) setLoadError('渲染初始化失败')
+        return
+      }
 
       renditionRef.current = rendition
 
@@ -134,14 +152,29 @@ export const EpubViewer = forwardRef(function EpubViewer({ bookId, onLocationCha
         try {
           if (e.deltaY > 0) rendition.next()
           else rendition.prev()
-        } catch {
-          // rendition 可能还没准备好或已达到边界，静默忽略
-        }
+        } catch { /* ignore */ }
         setTimeout(() => { wheelLocked = false }, 400)
       }
+
+      // ── 点击区域翻页（注入 iframe 内部） ──
+      function handleClick(e) {
+        const doc = e.currentTarget
+        const w = doc.documentElement?.clientWidth || doc.body?.clientWidth || window.innerWidth
+        const x = e.clientX
+        try {
+          if (x < w * 0.3) rendition.prev()
+          else if (x > w * 0.7) rendition.next()
+        } catch { /* ignore */ }
+        // 触发外部箭头闪现
+        setShowNav(true)
+        clearTimeout(navTimerRef.current)
+        navTimerRef.current = setTimeout(() => setShowNav(false), 1500)
+      }
+
       // 通过 hooks.content 注入到每个 iframe 文档
       rendition.hooks.content.register((contents) => {
         contents.document.addEventListener('wheel', handleWheel, { passive: false })
+        contents.document.addEventListener('click', handleClick)
       })
       viewerRef.current.addEventListener('wheel', handleWheel, { passive: false })
 
@@ -149,10 +182,12 @@ export const EpubViewer = forwardRef(function EpubViewer({ bookId, onLocationCha
       if (cancelled) return
 
       // 目录
-      const nav = book.navigation
-      if (nav) {
-        onTocReady(buildToc(nav.toc || []))
-      }
+      try {
+        const nav = book.navigation
+        if (nav && onTocReady) {
+          onTocReady(buildToc(nav.toc || []))
+        }
+      } catch { /* 目录获取失败不影响阅读 */ }
 
       // 恢复阅读进度
       let savedCfi = null
@@ -291,23 +326,6 @@ export const EpubViewer = forwardRef(function EpubViewer({ bookId, onLocationCha
     }
   }, [goNext, goPrev, flashNav])
 
-  // ── 点击区域翻页 ──
-  const handleClickArea = useCallback((e) => {
-    // 只在翻页模式下响应点击
-    const rect = viewerRef.current?.getBoundingClientRect()
-    if (!rect) return
-    const x = e.clientX - rect.left
-    const width = rect.width
-    // 左侧 25% 区域：上一页；右侧 25% 区域：下一页
-    if (x < width * 0.25) {
-      goPrev()
-      flashNav()
-    } else if (x > width * 0.75) {
-      goNext()
-      flashNav()
-    }
-  }, [goPrev, goNext, flashNav])
-
   function registerThemes(rendition, t, fs, ff, lh, ms) {
     const bgMap = {
       light: '#f5f1e8', sepia: '#f4ecd8', dark: '#1a1a2e', night: '#0f0f14'
@@ -353,7 +371,7 @@ export const EpubViewer = forwardRef(function EpubViewer({ bookId, onLocationCha
   const arrowColor = isDark ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.25)'
 
   return (
-    <div className="relative w-full h-full select-none flex justify-center" onClick={handleClickArea}>
+    <div className="relative w-full h-full select-none flex justify-center">
       {/* epub.js 渲染容器 */}
       <div ref={viewerRef} className="w-full h-full epub-container" style={{ maxWidth: '900px' }} />
 

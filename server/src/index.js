@@ -13,10 +13,10 @@ import { uploadRouter } from './routes/upload.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
-const app = Fastify({ logger: { level: 'info' } })
+const app = Fastify({ logger: { level: 'info' }, bodyLimit: 500 * 1024 * 1024 }) // 500MB 请求体上限（multipart 不受此限制，但保险）
 
 await app.register(cors, { origin: true })
-await app.register(multipart, { limits: { fileSize: 200 * 1024 * 1024 } }) // 200MB 上限
+await app.register(multipart, { limits: { fileSize: 200 * 1024 * 1024, files: 10000, parts: 10000 } }) // 200MB 上限，最多 10000 个文件/parts
 
 // 静态文件服务（封面缓存）
 const coversDir = path.join(__dirname, '../../cache/covers')

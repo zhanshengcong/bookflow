@@ -19,15 +19,11 @@ function saveToDisk() {
 export function getDB() {
   return {
     prepare(sql) {
-      let c = 0
-      const params = []
-      // Replace ? placeholders with positional $1, $2, etc for sql.js
-      const mapped = sql.replace(/\?/g, () => `$${++c}`)
       return {
         get(...args) {
           try {
-            const stmt = db.prepare(mapped)
-            stmt.bind(args)
+            const stmt = db.prepare(sql)
+            if (args.length) stmt.bind(args)
             if (stmt.step()) {
               const row = stmt.getAsObject()
               stmt.free()
@@ -42,8 +38,8 @@ export function getDB() {
         },
         all(...args) {
           try {
-            const stmt = db.prepare(mapped)
-            stmt.bind(args)
+            const stmt = db.prepare(sql)
+            if (args.length) stmt.bind(args)
             const rows = []
             while (stmt.step()) rows.push(stmt.getAsObject())
             stmt.free()
@@ -55,20 +51,20 @@ export function getDB() {
         },
         run(...args) {
           try {
-            db.run(mapped, args)
-            const meta = db.exec('SELECT last_insert_rowid() as id, changes() as changes')
-            const id = meta?.[0]?.values?.[0]?.[0]
-            const changes = meta?.[0]?.values?.[0]?.[1]
+            const stmt = db.prepare(sql)
+            if (args.length) stmt.bind(args)
+            stmt.step()
+            stmt.free()
             saveToDisk()
-            return { lastInsertRowid: id, changes }
+            return { changes: 1 }
           } catch (e) {
-            console.error('[DB run]', sql.slice(0, 80), e.message)
-            return { lastInsertRowid: undefined, changes: 0 }
+            console.error('[DB run]', sql.slice(0, 120), e?.message || e)
+            return { changes: 0 }
           }
         },
         raw(...args) {
-          const stmt = db.prepare(mapped)
-          stmt.bind(args)
+          const stmt = db.prepare(sql)
+          if (args.length) stmt.bind(args)
           const rows = []
           while (stmt.step()) rows.push(stmt.getAsObject())
           stmt.free()

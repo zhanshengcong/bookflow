@@ -9,6 +9,7 @@ import { useBookmarks } from '../hooks/useApi'
 import { EpubViewer } from '../components/EpubViewer'
 import { PdfViewer } from '../components/PdfViewer'
 import { TxtViewer } from '../components/TxtViewer'
+import { MobiViewer } from '../components/MobiViewer'
 import axios from 'axios'
 
 export function ReaderPage() {
@@ -82,6 +83,7 @@ export function ReaderPage() {
   }
 
   const progressPct = totalLocations > 0 ? Math.round((currentLocation / totalLocations) * 100) : 0
+  const unitLabel = book?.format === 'txt' ? '行' : '页'
 
   return (
     <div className={`h-full flex flex-col ${getReaderBg()}`}>
@@ -94,9 +96,11 @@ export function ReaderPage() {
         <p className="text-xs opacity-60 truncate max-w-[50%]">{book.title}</p>
 
         <div className="flex items-center gap-1">
-          <button onClick={() => setShowToc(!showToc)} className="p-2 rounded-lg hover:bg-black/5">
-            <List size={18} />
-          </button>
+          {book.format !== 'txt' && (
+            <button onClick={() => setShowToc(!showToc)} className="p-2 rounded-lg hover:bg-black/5">
+              <List size={18} />
+            </button>
+          )}
           <button onClick={() => setShowBookmarks(!showBookmarks)} className="p-2 rounded-lg hover:bg-black/5">
             <Bookmark size={18} />
           </button>
@@ -124,6 +128,12 @@ export function ReaderPage() {
             onLocationChange={handleLocationChange}
             ref={readerRef}
           />
+        ) : book.format === 'mobi' || book.format === 'azw3' ? (
+          <MobiViewer
+            bookId={book.id}
+            onLocationChange={handleLocationChange}
+            ref={readerRef}
+          />
         ) : (
           <EpubViewer
             bookId={book.id}
@@ -134,20 +144,30 @@ export function ReaderPage() {
         )}
       </div>
 
-      {/* ── 底部进度栏 ── */}
+      {/* ── 底部进度栏（支持拖拽滑动） ── */}
       <footer className={`px-4 py-2.5 ${getFooterBg()} border-t border-gray-200/20`}>
         <div className="flex items-center gap-3">
           <span className="text-xs opacity-50 min-w-[80px]">
             {totalLocations > 0
-              ? `${currentLocation} / ${totalLocations} 页`
+              ? `${currentLocation} / ${totalLocations} ${unitLabel}`
               : '加载中...'}
           </span>
-          <div className="flex-1 h-1.5 rounded-full bg-gray-300/30 overflow-hidden">
-            <div
-              className="h-full rounded-full bg-indigo-500 transition-all duration-300"
-              style={{ width: `${progressPct}%` }}
-            />
-          </div>
+          <ProgressBar
+            progressPct={progressPct}
+            totalLocations={totalLocations}
+            onSeek={(newLoc) => {
+              setCurrentLocation(newLoc)
+              // 通知 Viewer 跳转到对应位置
+              if (book.format === 'pdf') {
+                const page = Math.round((newLoc / totalLocations) * totalLocations) || 1
+                readerRef.current?.navigateTo?.(`page=${page}`)
+              } else if (book.format === 'txt' || book.format === 'mobi' || book.format === 'azw3') {
+                // 对于滚动型 Viewer，使用百分比跳转
+                const pct = totalLocations > 0 ? newLoc / totalLocations : 0
+                readerRef.current?.navigateToPercent?.(pct)
+              }
+            }}
+          />
           <span className="text-xs opacity-50 w-10 text-right">{progressPct}%</span>
         </div>
       </footer>
@@ -231,6 +251,85 @@ export function ReaderPage() {
   function getFooterBg() {
     return readerTheme === 'dark' || readerTheme === 'night' ? 'bg-gray-900/80' : 'bg-white/70 backdrop-blur'
   }
+}
+
+// ── 可拖拽进度条组件 ──
+function ProgressBar({ progressPct, totalLocations, onSeek }) {
+  const barRef = useRef(null)
+  const [dragging, setDragging] = useState(false)
+
+  const calcProgress = useCallback((clientX) => {
+    const rect = barRef.current?.getBoundingClientRect()
+    if (!rect) return 0
+    const x = Math.max(0, Math.min(clientX - rect.left, rect.width))
+    const pct = x / rect.width
+    return Math.round(pct * totalLocations)
+  }, [totalLocations])
+
+  const handleMouseDown = useCallback((e) => {
+    e.preventDefault()
+    setDragging(true)
+    const loc = calcProgress(e.clientX)
+    onSeek?.(loc)
+  }, [calcProgress, onSeek])
+
+  useEffect(() => {
+    if (!dragging) return
+    const handleMove = (e) => {
+      const loc = calcProgress(e.clientX)
+      onSeek?.(loc)
+    }
+    const handleUp = () => setDragging(false)
+    window.addEventListener('mousemove', handleMove)
+    window.addEventListener('mouseup', handleUp)
+    return () => {
+      window.removeEventListener('mousemove', handleMove)
+      window.removeEventListener('mouseup', handleUp)
+    }
+  }, [dragging, calcProgress, onSeek])
+
+  // 触摸事件
+  const handleTouchStart = useCallback((e) => {
+    setDragging(true)
+    const loc = calcProgress(e.touches[0].clientX)
+    onSeek?.(loc)
+  }, [calcProgress, onSeek])
+
+  useEffect(() => {
+    if (!dragging) return
+    const handleTouchMove = (e) => {
+      const loc = calcProgress(e.touches[0].clientX)
+      onSeek?.(loc)
+    }
+    const handleTouchEnd = () => setDragging(false)
+    window.addEventListener('touchmove', handleTouchMove)
+    window.addEventListener('touchend', handleTouchEnd)
+    return () => {
+      window.removeEventListener('touchmove', handleTouchMove)
+      window.removeEventListener('touchend', handleTouchEnd)
+    }
+  }, [dragging, calcProgress, onSeek])
+
+  const pct = totalLocations > 0 ? Math.min(100, Math.max(0, (progressPct || 0))) : 0
+
+  return (
+    <div
+      ref={barRef}
+      className="flex-1 h-2 rounded-full bg-gray-300/30 cursor-pointer relative group"
+      onMouseDown={handleMouseDown}
+      onTouchStart={handleTouchStart}
+    >
+      <div
+        className="h-full rounded-full bg-indigo-500 transition-all duration-150"
+        style={{ width: `${pct}%` }}
+      />
+      <div
+        className={`absolute top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-indigo-500 shadow-md
+          transition-opacity duration-150 ${dragging ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
+        style={{ left: `calc(${pct}% - 8px)` }}
+      />
+    </div>
+  )
 }
 
 // ── 阅读设置弹出面板 ──
@@ -335,8 +434,9 @@ function ReaderSettings({ onClose }) {
         <p className="text-xs text-gray-400 mb-2">操作方式</p>
         <div className="space-y-1.5 text-[11px] text-gray-500 leading-relaxed">
           <p><kbd className="px-1 py-0.5 rounded bg-gray-100 text-[10px] font-mono">← →</kbd> 键盘方向键翻页</p>
-          <p>鼠标 <span className="text-indigo-500">滚轮</span> 上下翻页</p>
-          <p>点击屏幕 <span className="text-indigo-500">左侧</span> / <span className="text-indigo-500">右侧</span> 区域翻页</p>
+          <p>鼠标 <span className="text-indigo-500">滚轮</span> 上下翻页（EPUB）</p>
+          <p>点击屏幕两侧 <span className="text-indigo-500">半透明箭头</span> 翻页（EPUB）</p>
+          <p>底部 <span className="text-indigo-500">进度条</span> 可拖拽跳转</p>
           <p>手机端 <span className="text-indigo-500">左右滑动</span> 翻页</p>
         </div>
       </div>

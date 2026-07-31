@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import axios from 'axios'
 
 // ── 书库 ──
@@ -39,21 +39,51 @@ export function useLibraries() {
   return { libraries, loading, fetch, addLibrary, removeLibrary, rescan }
 }
 
-// ── 书籍列表 ──
+// ── 书籍列表（分页加载） ──
+const PAGE_SIZE = 50
+
 export function useBooks(params = {}) {
   const [books, setBooks] = useState([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
+  const [hasMore, setHasMore] = useState(true)
+  const pageRef = useRef(1)
+  const loadingRef = useRef(false)
 
+  // 全量刷新（搜索/格式筛选变化时）
   const fetch = useCallback(async (opts = {}) => {
+    if (loadingRef.current) return
+    loadingRef.current = true
     setLoading(true)
     try {
-      const { data } = await axios.get('/api/books', { params: { ...params, ...opts } })
+      pageRef.current = 1
+      const { data } = await axios.get('/api/books', {
+        params: { ...params, ...opts, limit: PAGE_SIZE, page: 1 }
+      })
       setBooks(data.data)
       setTotal(data.total)
+      setHasMore(data.data.length < data.total)
     } catch (e) { console.error(e) }
     setLoading(false)
+    loadingRef.current = false
   }, [JSON.stringify(params)])
+
+  // 加载更多
+  const loadMore = useCallback(async () => {
+    if (loadingRef.current || !hasMore) return
+    loadingRef.current = true
+    const nextPage = pageRef.current + 1
+    try {
+      const { data } = await axios.get('/api/books', {
+        params: { ...params, limit: PAGE_SIZE, page: nextPage }
+      })
+      setBooks(prev => [...prev, ...data.data])
+      setTotal(data.total)
+      pageRef.current = nextPage
+      setHasMore(nextPage * PAGE_SIZE < data.total)
+    } catch (e) { console.error(e) }
+    loadingRef.current = false
+  }, [hasMore, JSON.stringify(params)])
 
   useEffect(() => { fetch() }, [fetch])
 
@@ -67,7 +97,7 @@ export function useBooks(params = {}) {
     await fetch()
   }
 
-  return { books, total, loading, fetch, removeBooks, removeBook }
+  return { books, total, loading, fetch, loadMore, hasMore, removeBooks, removeBook }
 }
 
 // ── 统计 ──
@@ -81,20 +111,6 @@ export function useStats() {
   }, [])
   useEffect(() => { fetch() }, [fetch])
   return { stats, refetchStats: fetch }
-}
-
-// ── 阅读进度 ──
-export function useProgress(bookId) {
-  const save = async (cfi, page, percentage) => {
-    await axios.put(`/api/progress/${bookId}`, { cfi, page, percentage })
-  }
-  const load = async () => {
-    try {
-      const { data } = await axios.get(`/api/progress/${bookId}`)
-      return data
-    } catch { return null }
-  }
-  return { save, load }
 }
 
 // ── 书签 ──

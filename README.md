@@ -71,15 +71,13 @@ cd bookflow/frontend && npm install
 **终端 1 — 启动后端 (端口 3001)**
 
 ```bash
-cd server
-npm start
+cd server; npm start
 ```
 
 **终端 2 — 启动前端 (端口 3000)**
 
 ```bash
-cd frontend
-npm run dev
+cd frontend; npm run dev
 ```
 
 > 前端 Vite 自动将 `/api` 和 `/covers` 代理到后端 `http://localhost:3001`。
